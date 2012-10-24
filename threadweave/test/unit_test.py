@@ -13,7 +13,7 @@ from time import clock
 #each context aims to expose an interface that resembles the numpy namespace (only bare minimum implemented!)
 #on top of that, one is free to use backend specific features through this context object, of course
 #if cross-backend compatibility is of no concern
-if False:
+if True:
     from ..backend import CUDA as Backend
 else:
     from ..backend import OpenCL as Backend
@@ -628,7 +628,10 @@ def test_utility():
     with Backend.Context(device) as ctx:
         #2d meshgrid function;
         #showcases some basic features
-        #basis of declaration syntax is (input_list) << [kernel_Axes] << (outputs_list): {body}
+        #the high level syntax is
+        #(input_list) << [kernel_Axes] << (outputs_list):
+        #   annotations
+        #{body}
         mesh_grid_2 = ctx.kernel(
             """
             (<type>[2,n,m] result) << [n,m] << ():
@@ -640,7 +643,39 @@ def test_utility():
             """,
         )
 
+        #the function as declared has no input arguments, but does have three unbound parameters
+        #calling with the unbound parameters will allocate the output argument accordingly,
+        #execute the kernel, and return the desired output array
         print mesh_grid_2(n=5,m=4, type='int32')
+
+
+def test_elementwise():
+    """
+    this test showcases the threadweave elementwise capability
+    by building on the nd-awareness of threadweave, the elementwise operations
+    in threadweave can easily be extended to allow for broadcasting operation
+    (and operations between arbitrarily strided arrays, once this is supported at the ndarray level)
+
+    TODO: overload operators in ndarray class
+    """
+    with Backend.Context(device) as ctx:
+        #allocate some simple test arrays
+        a = ctx.arange(4,  dtype=np.float32).reshape((4,1))
+        b = ctx.arange(4,  dtype=np.float32).reshape((1,4))
+        c = ctx.arange(16, dtype=np.float32).reshape((4,4))
+
+        #elementwise kernels can be defines using these simple expressions
+        #involving curly-braced argument positions
+        broadcasting_product = ctx.elementwise_kernel('{0}*{1}')
+        print broadcasting_product(a,b)
+
+        #there is derived helper functionality for binary operations, specifically
+        broadcasting_sum = ctx.binary_elementwise_kernel('+')
+        print broadcasting_sum(a,b)
+
+        #but we can also take it in the other direction, of more compicated expressions
+        funky_expression = ctx.elementwise_kernel('{0}*{1}+{2}')
+        print funky_expression(a, b, c)
 
 
 

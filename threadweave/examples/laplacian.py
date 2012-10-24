@@ -1,5 +1,5 @@
 import numpy as np
-from threadweave.backend import OpenCL as Backend
+from threadweave.backend import CUDA as Backend
 from threadweave.stencil import laplacian
 
 with Backend.Context(device = 0) as ctx:

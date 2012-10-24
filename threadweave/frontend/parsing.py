@@ -1,20 +1,8 @@
 
 
 """
-parsing module
-exports functions to transform source code into a kernel declaration object
+this module merely defines some general parsing constructs, for use elsewhere
 
-this is where the grammar is defined
-out arbitrary
-should we allow expressions as size constraints?
-usecase; subsampling an image, f.i. or differentiating a vector
-cute feature, but not crucial
-simply store these constraints as strings, and eval them,
-after shape arguments have been harvested
-or use sympy to reason about arbitrary constraint set
-
-
-this module merely defines some general parsing constructs
 """
 
 
@@ -24,10 +12,21 @@ import string
 
 from pyparsing import *
 
-import pycuda.tools
-dtype_to_ctype = {k:v for k,v in pycuda.compyte.dtypes.DTYPE_TO_NAME.iteritems() if isinstance(k, str)}
 
+try:
+    import pycuda.tools
+    import pycuda.compyte as compyte
+except ImportError:
+    try:
+        import pyopencl.tools
+        import pyopencl.compyte as compyte
+    except ImportError:
+        raise ImportError("no compyte")
+
+dtype_to_ctype = {k:v for k,v in compyte.dtypes.DTYPE_TO_NAME.iteritems() if isinstance(k, str)}
 dtypes = dtype_to_ctype.keys()
+
+print 'warning: non-primitive types have a backend-specific name. perhaps its better to let type specifiers be arbitrary identifiers during parsing, and deal with them further during code generation'
 
 
 #some general grammar definitions
@@ -51,7 +50,7 @@ identifier = Word(alphas+'_', alphanums+'_').setResultsName('identifier')
 dummy = Word(alphas.lower(),exact=1)
 
 
-#numerical defines
+#numerical defines; probably easy to just use IEEE compatible regexes for this
 def sign_wrap(expr): return Combine(Optional(Literal('-')) + expr)
 positive_integer        = Word(nums)
 integer                 = sign_wrap(positive_integer)

@@ -127,12 +127,12 @@ class C_CodeGenerator(CodeGenerator):
         return '{identifier}[{offset}]'.format(identifier=arg.identifier, offset=offset)
 
     def direct_index(self, arg, dim, index):
-        return '{arr_id}_stride_{dim}*{idx}'.format(
+        return '{arr_id}_stride_{dim}*({idx})'.format(
             arr_id  = arg.identifier,
             dim  = dim,
             idx  = index)
     def wrapped_index(self, arg, dim, index):
-        return '{arr_id}_stride_{dim}*({idx}%{arr_id}_shape_{dim})'.format(
+        return '{arr_id}_stride_{dim}*(({idx})%{arr_id}_shape_{dim})'.format(
             arr_id  = arg.identifier,
             dim  = dim,
             idx  = index)

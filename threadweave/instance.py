@@ -121,7 +121,10 @@ class AbstractKernelInstance(object):
                     stencil = self.declaration.get_stencil(output.stencil)
                     shape = tuple(s+p for s,p in zip(shape, stencil.total_padding))
                 #allocate
-                value = self.context.filled(shape, output.dtype, output.default)
+                if output.default:
+                    value = self.context.filled(shape, output.dtype, output.default)
+                else:
+                    value = self.context.empty(shape, output.dtype)
             #append to list of calling and return arguments
             args.append(value)
             output_arguments.append(value)

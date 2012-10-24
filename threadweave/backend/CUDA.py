@@ -14,31 +14,21 @@ from pycuda.compiler import SourceModule
 
 
 from ..context import AbstractContext
-class Context(AbstractContext):
+import threadpy.backend.CUDA
+
+class Context(AbstractContext, threadpy.backend.CUDA.Context):
     """CUDA context wrapper"""
 
     def __init__(self, device = 0, context = None):
-        if context is None:
-            #create context on specified device
-            self.device = Device(device)
-            self.context = self.device.make_context()
-        else:
-            #init from existing context; merely act as wrapper
-            self.context = context
-        self._kernel_declarations()
+        #init backend
+        threadpy.backend.CUDA.Context.__init__(self, device, context)
+        #init threadweave specific features
+        AbstractContext.__init__(self)
 
-    def __enter__(self):
-        return self
-    def __exit__(self, type, value, traceback):
-       self.context.pop()   #needed for proper cleanup
-
-
+    #device property accessors. only used by threadweave at the moment
+    #but they are probably better abstracted away in threadpy
+    #note that these are far from complete
     def supported_axes(self):
-        """
-        example of abstracting away some device specifics
-        this one happens to be relevant between my laptop and desktop
-        but there is probably tons more of these kind of things i havnt thought about
-        """
         cc = self.device.compute_capability()
         if cc < (2,0):
             return 'xy'     #only 2d threadblocks supported
@@ -51,35 +41,21 @@ class Context(AbstractContext):
         else:
             return 1024
 
-    #perform compilation step
+    #perform CUDA compilation step on threadweave kernel declaration
     def compile(self, declaration):
         source = CodeGenerator(self, declaration).generate()
         module = SourceModule(source)
         kernel = module.get_function('kernel_main')
         return KernelInstance(self, declaration, kernel)
 
-    #array creation functions
-    def array(self, object):
-        if isinstance(object, np.ndarray):
-            return gpuarray.to_gpu(np.array(object))
-        if isinstance(object, gpuarray.GPUArray):
-            return object * 1
-    def empty(self, shape, dtype=np.float32):
-        return gpuarray.empty(shape, dtype)
-    def filled(self, shape, dtype=np.float32, fill = None):
-        arr = self.empty(shape, dtype)
-        if not fill is None: arr.fill(fill)
-        return arr
-
-
-
 
 
 from ..instance import AbstractKernelInstance
 class KernelInstance(AbstractKernelInstance):
-    """wraps a raw pycuda kernel with array awareness"""
+    """wraps a raw pycuda kernel with array awareness, and grid/block policies"""
 
     def array_data(self, array):
+        """grab from array data that info required to pass into kernel"""
         return array
 
     def grid_and_block(self, size_arguments):
@@ -152,3 +128,58 @@ class CodeGenerator(SIMD_Code_Generator):
 
     synchronize_statement = '__syncthreads;'
 
+
+def array_monkey_patch():
+    """
+    array behavior monkey patching; shouldnt there be a cleaner way of doing this?
+    or perhaps al array subclassing should rather be foregone in favor of this?
+    hmmm
+
+    yet bigger problem; we require a context object ot build a kernel (so we can query underlying
+    device properties for code generation). yet native arrays do not have a context attribute,
+    instead probably relying on silly state machine bullshit. perhaps add cached context property to array?
+    alternatively, we could require one context per process for use with threadweave
+    but this is a tad hacky.
+    """
+
+    def wrap(orig_func):
+        #http://downgra.de/2009/05/16/python-monkey-patching/
+        """ decorator to wrap an existing method of a class.
+            e.g.
+
+            @wrap(Post.write)
+            def verbose_write(forig, self):
+                print 'generating post: %s (from: %s)' % (self.title,
+                                                          self.filename)
+                return forig(self)
+
+            the first parameter of the new function is the the original,
+            overwritten function ('forig').
+        """
+        import functools
+        import inspect
+        # har, some funky python magic NOW!
+        @functools.wraps(orig_func)
+        def outer(new_func):
+            def wrapper(*args, **kwargs):
+                return new_func(orig_func, *args, **kwargs)
+            if inspect.ismethod(orig_func):
+                setattr(orig_func.im_class, orig_func.__name__, wrapper)
+            return wrapper
+        return outer
+
+    from threadpy.backend.CUDA import ndarray
+    from pycuda.tools import context_dependent_memoize
+    #broadcasting binary ops
+    @context_dependent_memoize
+    def badd():
+        pass
+
+    @wrap(ndarray.__add__)
+    def __badd__(forig, self, other):
+        try:
+            return self + other
+        else:
+            pass
+
+##array_monkey_patch()

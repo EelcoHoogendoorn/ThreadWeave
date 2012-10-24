@@ -117,10 +117,6 @@ class KernelInstance(AbstractKernelInstance):
 
 
 
-
-
-
-
 from ..code_generation import SIMD_Code_Generator
 class CodeGenerator(SIMD_Code_Generator):
     """snippets that define OpenCL syntax"""

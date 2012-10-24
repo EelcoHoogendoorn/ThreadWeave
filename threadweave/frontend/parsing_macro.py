@@ -120,13 +120,15 @@ def replace_array_syntax(cg, source):
     replacement = cg.indexing_expression
 
     arrayidentifier = oneOf(' '.join(declaration.array_identifiers))('arrayidentifier')
-    index = Or([identifier, positive_integer])
-    index_expr = arrayidentifier + roundBracketedExpr(  delimitedList( index))('indices')
+##    index = Or([identifier, positive_integer])
+##    index = Word( printables.replace('()',''))
+    #note; updated parsing expression allows for braced expressions within the indexing statement
+    index_expr = arrayidentifier + originalTextFor( nestedExpr())('indices')
 
     def replace(s,l,t):
         """if match is correct, replace numpy syntax with c-compatible syntax"""
         identifier = str( t.arrayidentifier)
-        indices = tuple(t.indices)
+        indices = tuple(t.indices.strip('()').split(','))
 
         try:
             arg = declaration.arguments[identifier]

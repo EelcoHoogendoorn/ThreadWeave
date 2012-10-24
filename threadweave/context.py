@@ -9,32 +9,21 @@ verbose = False
 import numpy as np
 
 
+
 class AbstractContext(object):
 
     """
-    minimal wrapper for backend context
-    allows abstracting away the backend behind a uniform interface
+    mixes in backend-independent threadweave-specific functionality
     """
-
-
-    def __enter__(self):                        raise NotImplementedError()
-    def __exit__(self, type, value, traceback): raise NotImplementedError()
-
 
     def _kernel_declarations(self):
         """
-        add some numpy like functionality to the context, for arbitrary backend
+        threadweave dependent extensions to threadpy
         """
-
-##        arange = self.kernel("""(<dtype>[n] arange) << [n] << (): arange(n) = n;""")
-##        self.arange = lambda size, dtype: arange(templates=dict(dtype=np.dtype(dtype).name, n=size))
-        self.arange = lambda size, dtype: self.array(np.arange(size, dtype=dtype))
-
         def cut():
             """cut contiguous region from one array to a smaller one"""
         def paste():
             """paste smaller image into a larger one"""
-
 
         def pad(arr, stencil, value):
             """
@@ -55,24 +44,6 @@ class AbstractContext(object):
 ##        self.meshgrid = meshgrid
 
 
-    #array creation functions
-    def array(self, object): raise NotImplementedError()
-    def empty(self, shape, dtype=np.float32): raise NotImplementedError()
-    def filled(self, shape, dtype=np.float32, fill = None): raise NotImplementedError()
-    def ones(self, shape, dtype=np.float32):
-        return self.filled(shape, dtype, 1)
-    def zeros(self, shape, dtype=np.float32):
-        return self.filled(shape, dtype, 0)
-    def random(self, shape, dtype):
-        return self.array(np.random.random(shape).astype(dtype) )
-
-    #act on numpy arrays; not really part of interface
-    #place numpy util functions yet somewhere else?
-    def cut(self, source, S, E):
-        slice(s, )
-        return
-
-
 
     #where the magic begins, from the POV of the end user
     def kernel(self, source):
@@ -91,16 +62,135 @@ class AbstractContext(object):
         from .frontend import parsing_tensor
         declaration = parsing_tensor.parse(source)
         return JustInTimeKernel(self, declaration)
+    def elementwise_kernel(self, source):
+        """
+        source is a simple expression, to be applied to each element of each operand
+        broadcasting rules may apply to the arguments
+        returns a broadcasting-kernel-factory, which caches based on dimensionality
+        """
+        #note; we do not go from source to declaration here (rather, to factory first)
+        #hence the different design than above
+        return ElementwiseFactory(self, source)
+
+    def binary_elementwise_kernel(self, op):
+        """
+        derived of elementwise; only needs a binary op as input
+        """
+        #note; we do not go from source to declaration here (rather, to factory first)
+        #hence the different design than above
+        return BinaryElementwiseFactory(self, op)
 
 
-    def compile(self, declaration): raise NotImplementedError()
+    def compile(self, declaration):
+        """backend specific function, to transform a declaration into a kernel"""
+        raise NotImplementedError()
 
 
 
 
+class ElementwiseFactory(object):
+    """
+    created with expressions of the form '{0}+{1}'
+    {index} is an argument dummy. all arguments must be broadcast-compatible
+
+    all shapes are taken to be compile time constants
+    different types, shapes, and thus dimensions as well, will all trigger a rebuild
+    a change of type may influence output type in a non-obvious way, triggering a rebuild
+    and for simplicity we recompile for all shape changes, since shape of 1 triggers
+    broadcasting, which rquires special code emission
+
+    alternatively, we can cache on a sig that tests if a dimension equals 1,
+    which we take to be the broadcasting pattern. then we could default to making
+    all non-broadcasted size args runtime variable. would require less compilation
+    but per-thread initialization requirements would be rather hideous
+    """
+    def __init__(self, context, source):
+        self.context = context
+
+        from .frontend.parsing_elementwise import parse
+        self.arguments, self.expression = parse(source)
+
+        self.cache = {}
+
+    def build(self, args):
+        """
+        build a declaration for this expresion, given the arguments
+        this code need not be efficient, since it is behind cache
+        """
+        ndim = np.unique(arg.ndim for arg in args)
+        assert(ndim.size==1)
+        ndim = ndim[0]
+
+        dtype = args[0].dtype.name       #to be replace with get_common_dtype equivalent. eval the given expression on zero size numpy arrays
+        shapes = np.array([arg.shape for arg in args])
+        shape = shapes.max(axis=0)
+
+        #build a declaration
+        from . import declaration
+        decl = declaration.KernelDeclaration()
+
+        #add axes to declaration
+        from pyparsing import alphas
+        axes = alphas[:ndim]
+        for axis, size in zip(axes, shape):
+            axis = decl.axis(identifier = axis, size = size)
+
+        #add inputs
+        for i, arg in enumerate(args):
+            input = decl.input(identifier = 'input_{i}'.format(i=i), dtype=arg.dtype.name, shape = arg.shape)
+
+        #add output
+        output = decl.output(
+                identifier = 'output',
+                dtype = dtype,
+                shape = shape)
+
+        #broadcasting logic
+        BC = shapes==1
+        EQ = shapes == shape[np.newaxis,:]
+        valid = np.logical_or(BC, EQ)
+        assert(np.all(valid))           #assert valid broadcasting shape
+
+        def arg_axes(arg, bc):
+            return ','.join(a+'*0'*bca for a,bca in zip(axes, bc) )
+        idx = [arg_axes(arg, bc) for arg, bc in zip(args, BC)]
+        #construct broadcasting indexing expression
+        body = 'output({}) = '.format(','.join(axes)) + self.expression.format(idx=idx) + ';'
+        from .frontend import parsing_macro
+        decl.body = parsing_macro.parse_body( body)
+
+        return decl
 
 
+    def instantiate(self, args):
+        """
+        caching based on full shapes and types
+        implemented like this, because shapechange from bc to non-bc
+        requires different code emission
+        another simple implementation would be to pass in all strides, rather than computing internally
+        """
 
+        sig = tuple((arg.dtype, arg.shape) for arg in args)
+        try:
+            return self.cache[sig]
+        except:
+            declaration = self.build(args)
+            kernel = JustInTimeKernel(self.context, declaration)
+            self.cache[sig] = kernel
+            return kernel
+
+
+    def __call__(self, *args):
+        """args is a list of input arguments"""
+        #obtain a jit kernel
+        instance = self.instantiate(args)
+        #invoke the jit kernel
+        return instance(*args)
+
+class BinaryElementwiseFactory(ElementwiseFactory):
+    """simple subclass of elementwise. needs to be inited with a single binary op only"""
+    def __init__(self, context, op):
+        super(BinaryElementwiseFactory, self).__init__(context, '{0}'+op+'{1}')
 
 
 class JustInTimeKernel(object):
